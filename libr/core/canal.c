@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2020 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2021 - pancake, nibble */
 
 #include <r_types.h>
 #include <r_list.h>
@@ -1488,12 +1488,15 @@ static int core_anal_graph_construct_edges(RCore *core, RAnalFunction *fcn, int 
 					char *from = get_title (bbi->addr);
 					char *to = get_title (bbi->jump);
 					r_cons_printf ("age %s %s\n", from, to);
-					free(from);
-					free(to);
+					free (from);
+					free (to);
 				} else {
+					const char* edge_color = bbi->fail != -1 ? pal_jump : pal_trfa;
+					if (sdb_const_get (core->sdb, sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", bbi->addr, bbi->jump), 0)) {
+						edge_color = "cyan";
+					}
 					r_cons_printf ("        \"0x%08"PFMT64x"\" -> \"0x%08"PFMT64x"\" "
-							"[color=\"%s\"];\n", bbi->addr, bbi->jump,
-							bbi->fail != -1 ? pal_jump : pal_trfa);
+							"[color=\"%s\"];\n", bbi->addr, bbi->jump, edge_color);
 					core_anal_color_curr_node (core, bbi);
 				}
 			}
@@ -1604,7 +1607,6 @@ static int core_anal_graph_construct_nodes(RCore *core, RAnalFunction *fcn, int 
 			sdb_num_set (DB, key, bbi->size, 0); // bb.<addr>.size=<num>
 		} else if (is_json) {
 			RDebugTracepoint *t = r_debug_trace_get (core->dbg, bbi->addr);
-			ut8 *buf = malloc (bbi->size);
 			pj_o (pj);
 			pj_kn (pj, "offset", bbi->addr);
 			pj_kn (pj, "size", bbi->size);
@@ -1650,6 +1652,7 @@ static int core_anal_graph_construct_nodes(RCore *core, RAnalFunction *fcn, int 
 			}
 			pj_k (pj, "ops");
 			pj_a (pj);
+			ut8 *buf = malloc (bbi->size);
 			if (buf) {
 				r_io_read_at (core->io, bbi->addr, buf, bbi->size);
 				if (is_json_format_disasm) {
@@ -1735,7 +1738,7 @@ static int core_anal_graph_construct_nodes(RCore *core, RAnalFunction *fcn, int 
 							r_cons_printf(" \"0x%08"PFMT64x"\" [fillcolor=\"%s\","
 							"color=\"black\", fontname=\"%s\","
 							" label=\"%s\", URL=\"%s/0x%08"PFMT64x"\"]\n",
-							bbi->addr, difftype, diffstr, font, fcn->name,
+							bbi->addr, difftype, font, diffstr, fcn->name,
 							bbi->addr);
 						}
 						free (diffstr);
@@ -1759,7 +1762,7 @@ static int core_anal_graph_construct_nodes(RCore *core, RAnalFunction *fcn, int 
 							r_cons_printf(" \"0x%08"PFMT64x"\" [fillcolor=\"%s\","
 									"color=\"black\", fontname=\"%s\","
 									" label=\"%s\", URL=\"%s/0x%08"PFMT64x"\"]\n",
-									bbi->addr, difftype, str, font, fcn->name, bbi->addr);
+									bbi->addr, difftype, font, str, fcn->name, bbi->addr);
 						}
 					}
 					r_diff_free (d);
@@ -2131,6 +2134,7 @@ R_API int r_core_print_bb_gml(RCore *core, RAnalFunction *fcn) {
 	r_list_foreach (fcn->bbs, iter, bb) {
 		RFlagItem *flag = r_flag_get_i (core->flags, bb->addr);
 		char *msg = flag? strdup (flag->name): r_str_newf ("0x%08"PFMT64x, bb->addr);
+		// TODO char *str = r_str_escape_dot (msg);
 #if USE_ID
 		ht_uu_insert (ht, bb->addr, id);
 		r_cons_printf ("  node [\n"
@@ -4735,9 +4739,9 @@ static void handle_var_stack_access(RAnalEsil *esil, ut64 addr, RAnalVarAccessTy
 	}
 }
 
-static int esilbreak_mem_write(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
+static bool esilbreak_mem_write(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
 	handle_var_stack_access (esil, addr, R_ANAL_VAR_ACCESS_TYPE_WRITE, len);
-	return 1;
+	return true;
 }
 
 /* TODO: move into RCore? */
@@ -4747,7 +4751,7 @@ static ut64 esilbreak_last_data = UT64_MAX;
 static ut64 ntarget = UT64_MAX;
 
 // TODO differentiate endian-aware mem_read with other reads; move ntarget handling to another function
-static int esilbreak_mem_read(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
+static bool esilbreak_mem_read(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 	ut8 str[128];
 	if (addr != UT64_MAX) {
 		esilbreak_last_read = addr;
@@ -4795,12 +4799,12 @@ static int esilbreak_mem_read(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 			r_anal_xrefs_set (mycore->anal, esil->address, addr, R_ANAL_REF_TYPE_DATA);
 		}
 	}
-	return 0; // fallback
+	return false; // fallback
 }
 
-static int esilbreak_reg_write(RAnalEsil *esil, const char *name, ut64 *val) {
+static bool esilbreak_reg_write(RAnalEsil *esil, const char *name, ut64 *val) {
 	if (!esil) {
-		return 0;
+		return false;
 	}
 	RAnal *anal = esil->anal;
 	EsilBreakCtx *ctx = esil->user;

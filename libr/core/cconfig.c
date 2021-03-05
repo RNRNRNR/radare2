@@ -1510,6 +1510,13 @@ static bool cb_dbg_btalgo(void *user, void *data) {
 	return true;
 }
 
+static bool cb_dbg_maxsnapsize(void *user, void *data) {
+	RCore *core = (RCore*) user;
+	RConfigNode *node = (RConfigNode*) data;
+	core->dbg->maxsnapsize = r_num_math (core->num, node->value);
+	return true;
+}
+
 static bool cb_dbg_libs(void *user, void *data) {
 	RCore *core = (RCore*) user;
 	RConfigNode *node = (RConfigNode*) data;
@@ -2104,9 +2111,7 @@ static bool cb_io_cache(void *user, void *data) {
 static bool cb_ioaslr(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
-	if (node->i_value != core->io->aslr) {
-		core->io->aslr = node->i_value;
-	}
+	core->io->aslr = (bool)node->i_value;
 	return true;
 }
 
@@ -2115,7 +2120,7 @@ static bool cb_io_pava(void *user, void *data) {
 	RConfigNode *node = (RConfigNode *) data;
 	core->print->pava = node->i_value;
 	if (node->i_value && core->io->va) {
-		eprintf ("WARNING: You may probably want to disable io.va too\n");
+		eprintf ("WARNING: You may probably want to disable io.va too.\n");
 	}
 	return true;
 }
@@ -2142,21 +2147,21 @@ static bool cb_iova(void *user, void *data) {
 static bool cb_ioff(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
-	core->io->ff = node->i_value;
+	core->io->ff = (bool)node->i_value;
 	return true;
 }
 
 static bool cb_io_oxff(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
-	core->io->Oxff = node->i_value;
+	core->io->Oxff = (ut8)node->i_value;
 	return true;
 }
 
 static bool cb_ioautofd(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
-	core->io->autofd = node->i_value;
+	core->io->autofd = (bool)node->i_value;
 	return true;
 }
 
@@ -3275,11 +3280,10 @@ R_API int r_core_config_init(RCore *core) {
 	SETDESC (n, "Realign disassembly if there is a flag in the middle of an instruction");
 	SETCB ("asm.flags.real", "false", &cb_flag_realnames,
 	       "Show flags' unfiltered realnames instead of names, except realnames from demangling");
-	SETBPREF ("asm.bb.line", "false", "Show empty line after every basic block");
-	SETBPREF ("asm.bb.middle", "true", "Realign disassembly if a basic block starts in the middle of an instruction");
 	SETBPREF ("asm.lbytes", "true", "Align disasm bytes to left");
 	SETBPREF ("asm.lines", "true", "Show ASCII-art lines at disassembly");
-	SETBPREF ("asm.lines.bb", "true", "Show flow lines at jumps");
+	SETBPREF ("asm.lines.jmp", "true", "Show flow lines at jumps");
+	SETBPREF ("asm.lines.bb", "false", "Show empty line after every basic block");
 	SETBPREF ("asm.lines.call", "false", "Enable call lines");
 	SETBPREF ("asm.lines.ret", "false", "Show separator lines after ret");
 	SETBPREF ("asm.lines.out", "true", "Show out of block lines");
@@ -3290,6 +3294,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETICB ("asm.sub.varmin", 0x100, &cb_asmsubvarmin, "Minimum value to substitute in instructions (asm.sub.var)");
 	SETCB ("asm.sub.tail", "false", &cb_asmsubtail, "Replace addresses with prefix .. syntax");
 	SETBPREF ("asm.middle", "false", "Allow disassembling jumps in the middle of an instruction");
+	SETBPREF ("asm.bbmiddle", "true", "Realign disassembly if a basic block starts in the middle of an instruction");
 	SETBPREF ("asm.noisy", "true", "Show comments considered noisy but possibly useful");
 	SETBPREF ("asm.offset", "true", "Show offsets in disassembly");
 	SETBPREF ("hex.offset", "true", "Show offsets in hex-dump");
@@ -3385,7 +3390,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETOPTIONS (n, "a", "8", "p", "e", "u", "i", "U", "f", NULL);
 	SETCB ("bin.filter", "true", &cb_binfilter, "Filter symbol names to fix dupped names");
 	SETCB ("bin.force", "", &cb_binforce, "Force that rbin plugin");
-	SETPREF ("bin.cache", "false", "Enable io.cache and fall to io.cache.read if bin needs to patch relocs");
+	SETPREF ("bin.cache", "false", "Use io.cache.read if bin needs to patch relocs");
 	SETPREF ("bin.lang", "", "Language for bin.demangle");
 	SETBPREF ("bin.demangle", "true", "Import demangled symbols from RBin");
 	SETBPREF ("bin.demangle.libs", "false", "Show library name on demangled symbols names");
@@ -3533,6 +3538,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETI ("stack.size", 64,  "Size in bytes of stack hexdump in visual debug");
 	SETI ("stack.delta", 0,  "Delta for the stack dump");
 
+	SETCB ("dbg.maxsnapsize", "32M", &cb_dbg_maxsnapsize, "Dont make snapshots of maps bigger than a specific size");
 	SETCB ("dbg.libs", "", &cb_dbg_libs, "If set stop when loading matching libname");
 	SETBPREF ("dbg.skipover", "false", "Make dso perform a dss (same goes for esil and visual/graph");
 	SETI ("dbg.hwbp", 0, "Set HW or SW breakpoints");
@@ -3774,6 +3780,7 @@ R_API int r_core_config_init(RCore *core) {
 #endif
 	r_config_desc (cfg, "scr.fgets", "Use fgets() instead of dietline for prompt input");
 	SETCB ("scr.echo", "false", &cb_screcho, "Show rcons output in realtime to stderr and buffer");
+	SETPREF ("scr.loopnl", "false", "Add a newline after every command executed in @@ loops");
 	SETICB ("scr.linesleep", 0, &cb_scrlinesleep, "Flush sleeping some ms in every line");
 	SETICB ("scr.maxtab", 4096, &cb_completion_maxtab, "Change max number of auto completion suggestions");
 	SETICB ("scr.pagesize", 1, &cb_scrpagesize, "Flush in pages when scr.linesleep is != 0");

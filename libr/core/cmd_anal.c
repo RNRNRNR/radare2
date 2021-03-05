@@ -60,6 +60,7 @@ static const char *help_msg_aa[] = {
 	"aaT", " [len]", "analyze code after trap-sleds",
 	"aau", " [len]", "list mem areas (larger than len bytes) not covered by functions",
 	"aav", " [sat]", "find values referencing a specific section or map",
+	"aaw", "", "analyze all meta words (Cd) and add r. named flags for referenced pointers",
 	NULL
 };
 
@@ -569,6 +570,9 @@ static const char *help_msg_age[] = {
 	"age", " title1 title2", "Add an edge from the node with \"title1\" as title to the one with title \"title2\"",
 	"age", " \"title1 with spaces\" title2", "Add an edge from node \"title1 with spaces\" to node \"title2\"",
 	"age-", " title1 title2", "Remove an edge from the node with \"title1\" as title to the one with title \"title2\"",
+	"ageh", "", "List all the highlighted edges",
+	"ageh", " nodeA nodeB", "Highlight edge between nodeA and nodeB",
+	"ageh-", " nodeA nodeB", "Highlight edge between nodeA and nodeB",
 	"age?", "", "Show this help",
 	NULL
 };
@@ -1715,16 +1719,16 @@ R_API char *cmd_syscall_dostr(RCore *core, st64 n, ut64 addr) {
 	return r_str_appendf (res, ")");
 }
 
-static int mw(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
+static bool mw(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
 	int *ec = (int*)esil->user;
 	*ec += (len * 2);
-	return 1;
+	return true;
 }
 
-static int mr(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
+static bool mr(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 	int *ec = (int*)esil->user;
 	*ec += len;
-	return 1;
+	return true;
 }
 
 static int esil_cost(RCore *core, ut64 addr, const char *expr) {
@@ -2889,8 +2893,8 @@ static void r_core_anal_fmap(RCore *core, const char *input) {
 		}
 	}
 	r_cons_printf ("\n%d / %" PFMT64u " (%.2lf%%) bytes assigned to a function\n",
-		assigned, code_size, 100.0*( (float) assigned) / code_size);
-	free(bitmap);
+		assigned, code_size, 100.0 * ( (float) assigned) / code_size);
+	free (bitmap);
 }
 
 static bool fcnNeedsPrefix(const char *name) {
@@ -4654,8 +4658,11 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			r_core_cmd_help (core, help_msg);
 		} break;
 		default:
-			r_cons_printf ("%d\n", r_list_length (
-						core->dbg->reg->regset[0].pool));
+			{
+				void *p = core->dbg->reg->regset[0].pool;
+				int len = p? r_list_length (p): 0;
+				r_cons_printf ("%d\n", len);
+			}
 			break;
 		}
 		break;
@@ -5491,12 +5498,12 @@ typedef struct {
 	int size;
 } AeaMemItem;
 
-static int mymemwrite(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
-	RListIter *iter;
+static bool mymemwrite(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
 	AeaMemItem *n;
+	RListIter *iter;
 	r_list_foreach (mymemxsw, iter, n) {
 		if (addr == n->addr) {
-			return len;
+			return true;
 		}
 	}
 	if (!r_io_is_valid_offset (esil->anal->iob.io, addr, 0)) {
@@ -5508,15 +5515,15 @@ static int mymemwrite(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
 		n->size = len;
 		r_list_push (mymemxsw, n);
 	}
-	return len;
+	return true;
 }
 
-static int mymemread(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
+static bool mymemread(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 	RListIter *iter;
 	AeaMemItem *n;
 	r_list_foreach (mymemxsr, iter, n) {
 		if (addr == n->addr) {
-			return len;
+			return true;
 		}
 	}
 	if (!r_io_is_valid_offset (esil->anal->iob.io, addr, 0)) {
@@ -5528,10 +5535,10 @@ static int mymemread(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 		n->size = len;
 		r_list_push (mymemxsr, n);
 	}
-	return len;
+	return true;
 }
 
-static int myregwrite(RAnalEsil *esil, const char *name, ut64 *val) {
+static bool myregwrite(RAnalEsil *esil, const char *name, ut64 *val) {
 	AeaStats *stats = esil->user;
 	if (oldregread && !strcmp (name, oldregread)) {
 		r_list_pop (stats->regread);
@@ -5550,10 +5557,10 @@ static int myregwrite(RAnalEsil *esil, const char *name, ut64 *val) {
 		}
 		free (v);
 	}
-	return 0;
+	return false;
 }
 
-static int myregread(RAnalEsil *esil, const char *name, ut64 *val, int *len) {
+static bool myregread(RAnalEsil *esil, const char *name, ut64 *val, int *len) {
 	AeaStats *stats = esil->user;
 	if (!IS_DIGIT (*name)) {
 		if (!contains (stats->inputregs, name)) {
@@ -5568,10 +5575,10 @@ static int myregread(RAnalEsil *esil, const char *name, ut64 *val, int *len) {
 			r_list_push (stats->regread, strdup (name));
 		}
 	}
-	return 0;
+	return false;
 }
 
-static void showregs (RList *list) {
+static void showregs(RList *list) {
 	if (!r_list_empty (list)) {
 		char *reg;
 		RListIter *iter;
@@ -5582,10 +5589,10 @@ static void showregs (RList *list) {
 			}
 		}
 	}
-	r_cons_newline();
+	r_cons_newline ();
 }
 
-static void showmem (RList *list) {
+static void showmem(RList *list) {
 	if (!r_list_empty (list)) {
 		AeaMemItem *item;
 		RListIter *iter;
@@ -5597,7 +5604,7 @@ static void showmem (RList *list) {
 	r_cons_newline ();
 }
 
-static void showregs_json (RList *list, PJ *pj) {
+static void showregs_json(RList *list, PJ *pj) {
 	pj_a (pj);
 	if (!r_list_empty (list)) {
 		char *reg;
@@ -5610,7 +5617,7 @@ static void showregs_json (RList *list, PJ *pj) {
 	pj_end (pj);
 }
 
-static void showmem_json (RList *list, PJ *pj) {
+static void showmem_json(RList *list, PJ *pj) {
 	pj_a (pj);
 	if (!r_list_empty (list)) {
 		RListIter *iter;
@@ -8344,27 +8351,26 @@ static void agraph_print_edge_gml(RANode *from, RANode *to, void *user) {
 }
 
 static void agraph_print_node_dot(RANode *n, void *user) {
-	char *label = strdup (n->body);
-	//label = r_str_replace (label, "\n", "\\l", 1);
-	if (!label || !*label) {
+	if (R_STR_ISEMPTY (n->body)) {
 		r_cons_printf ("\"%s\" [URL=\"%s\", color=\"lightgray\", label=\"%s\"]\n",
 				n->title, n->title, n->title);
 	} else {
+		char *label = strdup (n->body);
+		//label = r_str_replace (label, "\n", "\\l", 1);
 		r_cons_printf ("\"%s\" [URL=\"%s\", color=\"lightgray\", label=\"%s\\n%s\"]\n",
 				n->title, n->title, n->title, label);
+		free (label);
 	}
-	free (label);
 }
 
 static void agraph_print_node(RANode *n, void *user) {
-	char *encbody, *cmd;
-	int len = strlen (n->body);
+	size_t len = strlen (n->body);
 
 	if (len > 0 && n->body[len - 1] == '\n') {
 		len--;
 	}
-	encbody = r_base64_encode_dyn (n->body, len);
-	cmd = r_str_newf ("agn \"%s\" base64:%s\n", n->title, encbody);
+	char *encbody = r_base64_encode_dyn (n->body, len);
+	char *cmd = r_str_newf ("agn \"%s\" base64:%s\n", n->title, encbody);
 	r_cons_print (cmd);
 	free (cmd);
 	free (encbody);
@@ -8461,7 +8467,15 @@ static bool convert_dot_str_to_image(RCore *core, char *str, const char *save_pa
 }
 
 static void agraph_print_edge_dot(RANode *from, RANode *to, void *user) {
-	r_cons_printf ("\"%s\" -> \"%s\"\n", from->title, to->title);
+	RCore *core = (RCore *)user;
+	ut64 a = r_num_math (NULL, from->title);
+	ut64 b = r_num_math (NULL, to->title);
+	const char *k = sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", a, b);
+	if (sdb_exists (core->sdb, k)) {
+		r_cons_printf ("\"%s\" -> \"%s\" [color=cyan]\n", from->title, to->title);
+	} else {
+		r_cons_printf ("\"%s\" -> \"%s\"\n", from->title, to->title);
+	}
 }
 
 static void agraph_print_edge(RANode *from, RANode *to, void *user) {
@@ -8534,6 +8548,30 @@ static void cmd_agraph_node(RCore *core, const char *input) {
 	}
 }
 
+static bool cmd_ageh(RCore *core, const char *input) {
+	if (!*input) {
+		r_core_cmd0 (core, "k~agraph.edge");
+		return false;
+	}
+	bool add = true;
+	if (*input == '-') {
+		add = false;
+		input++;
+	}
+	char *arg = r_str_trim_dup (input + 1);
+	char *sp = strchr (arg, ' ');
+	if (!sp) {
+		return false;
+	}
+	*sp++ = 0;
+	ut64 a = r_num_math (core->num, arg);
+	ut64 b = r_num_math (core->num, sp);
+
+	const char *k = sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", a, b);
+	sdb_set (core->sdb, k, add? "true": "", 0);
+	return true;
+}
+
 static void cmd_agraph_edge(RCore *core, const char *input) {
 	switch (*input) {
 	case ' ': // "age"
@@ -8558,13 +8596,16 @@ static void cmd_agraph_edge(RCore *core, const char *input) {
 			break;
 		}
 		if (*input == ' ') {
-			r_agraph_add_edge (core->graph, u, v);
+			r_agraph_add_edge (core->graph, u, v, false);
 		} else {
 			r_agraph_del_edge (core->graph, u, v);
 		}
 		r_str_argv_free (args);
 		break;
 	}
+	case 'h':
+		cmd_ageh (core, input + 1);
+		break;
 	case '?':
 	default:
 		r_core_cmd_help (core, help_msg_age);
@@ -8636,14 +8677,14 @@ R_API void r_core_agraph_print(RCore *core, int use_utf, const char *input) {
 			"node [fillcolor=white, style=filled shape=box "
 			"fontname=\"%s\" fontsize=\"8\"];\n",
 			font);
-		r_agraph_foreach (core->graph, agraph_print_node_dot, NULL);
-		r_agraph_foreach_edge (core->graph, agraph_print_edge_dot, NULL);
+		r_agraph_foreach (core->graph, agraph_print_node_dot, core);
+		r_agraph_foreach_edge (core->graph, agraph_print_edge_dot, core);
 		r_cons_printf ("}\n");
 		break;
 	}
 	case '*': // "agg*" -
-		r_agraph_foreach (core->graph, agraph_print_node, NULL);
-		r_agraph_foreach_edge (core->graph, agraph_print_edge, NULL);
+		r_agraph_foreach (core->graph, agraph_print_node, core);
+		r_agraph_foreach_edge (core->graph, agraph_print_edge, core);
 		break;
 	case 'J':
 	case 'j': {
@@ -8880,7 +8921,7 @@ static void cmd_anal_graph(RCore *core, const char *input) {
 			break;
 			}
 		case 'd': // "agfd"
-			if (input[2] == 'm') {
+			if (input[2] == 'm') { // "agfdm"
 				r_core_anal_graph (core, r_num_math (core->num, input + 3),
 					R_CORE_ANAL_GRAPHLINES);
 			} else {
@@ -9443,6 +9484,28 @@ static void _CbInRangeAav(RCore *core, ut64 from, ut64 to, int vsize, void *user
 	}
 }
 
+static void cmd_anal_aaw(RCore *core, const char *input) {
+	RIntervalTreeIter it;
+	RAnalMetaItem *item;
+	r_interval_tree_foreach (&core->anal->meta, it, item) {
+		RIntervalNode *node = r_interval_tree_iter_get (&it);
+		ut64 size = r_meta_item_size (node->start, node->end);
+		if (item->type == R_META_TYPE_DATA && size == core->anal->bits / 8) {
+			ut8 buf[8] = {0};
+			r_io_read_at (core->io, node->start, buf, 8);
+			ut64 n = r_read_ble (buf, core->print->big_endian, core->anal->bits);
+			RFlagItem *fi = r_flag_get_at (core->flags, n, false);
+			if (fi) {
+				char *fn = r_str_newf ("r.%s", fi->name);
+				r_flag_set (core->flags, fn, node->start, true);
+				free (fn);
+			} else if (core->anal->verbose) {
+				eprintf ("Unknown pointer 0x%"PFMT64x" at 0x%"PFMT64x"\n", n, (ut64)node->start);
+			}
+		}
+	}
+}
+
 static void cmd_anal_aav(RCore *core, const char *input) {
 #define seti(x,y) r_config_set_i(core->config, x, y);
 #define geti(x) r_config_get_i(core->config, x);
@@ -9482,7 +9545,7 @@ static void cmd_anal_aav(RCore *core, const char *input) {
 				r_io_map_end (map)));
 			r_print_rowlog_done (core->print, oldstr);
 			(void)r_core_search_value_in_range (core, map->itv,
-				r_io_map_begin (map), r_io_map_end (map), vsize, _CbInRangeAav, (void *)asterisk);
+				r_io_map_begin (map), r_io_map_end (map), vsize, _CbInRangeAav, (void *)(size_t)asterisk);
 		}
 		r_list_free (list);
 	} else {
@@ -9521,7 +9584,7 @@ static void cmd_anal_aav(RCore *core, const char *input) {
 				}
 				oldstr = r_print_rowlog (core->print, sdb_fmt ("0x%08"PFMT64x"-0x%08"PFMT64x" in 0x%"PFMT64x"-0x%"PFMT64x" (aav)", from, to, begin, end));
 				r_print_rowlog_done (core->print, oldstr);
-				(void)r_core_search_value_in_range (core, map->itv, from, to, vsize, _CbInRangeAav, (void *)asterisk);
+				(void)r_core_search_value_in_range (core, map->itv, from, to, vsize, _CbInRangeAav, (void *)(size_t)asterisk);
 			}
 		}
 		r_list_free (list);
@@ -9705,6 +9768,9 @@ static int cmd_anal_all(RCore *core, const char *input) {
 		break;
 	case 'v': // "aav"
 		cmd_anal_aav (core, input);
+		break;
+	case 'w': // "aaw"
+		cmd_anal_aaw (core, input);
 		break;
 	case 'u': // "aau" - print areas not covered by functions
 		r_core_anal_nofunclist (core, input + 1);
@@ -10042,7 +10108,7 @@ static int cmd_anal_all(RCore *core, const char *input) {
 	return true;
 }
 
-static bool anal_fcn_data (RCore *core, const char *input) {
+static bool anal_fcn_data(RCore *core, const char *input) {
 	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, R_ANAL_FCN_TYPE_ANY);
 	if (fcn) {
 		int i;
@@ -10087,7 +10153,7 @@ static bool anal_fcn_data (RCore *core, const char *input) {
 	return false;
 }
 
-static bool anal_fcn_data_gaps (RCore *core, const char *input) {
+static bool anal_fcn_data_gaps(RCore *core, const char *input) {
 	ut64 end = UT64_MAX;
 	RAnalFunction *fcn;
 	RListIter *iter;

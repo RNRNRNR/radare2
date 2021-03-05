@@ -4199,7 +4199,7 @@ R_API void r_core_visual_disasm_up(RCore *core, int *cols) {
 
 R_API void r_core_visual_disasm_down(RCore *core, RAsmOp *op, int *cols) {
 	int midflags = r_config_get_i (core->config, "asm.flags.middle");
-	const bool midbb = r_config_get_i (core->config, "asm.bb.middle");
+	const bool midbb = r_config_get_i (core->config, "asm.bbmiddle");
 	RAnalFunction *f = NULL;
 	f = r_anal_get_fcn_in (core->anal, core->offset, 0);
 	op->size = 1;
@@ -4313,7 +4313,7 @@ dodo:
 
 			if (cmdvhex && *cmdvhex) {
 				snprintf (debugstr, sizeof (debugstr),
-					"?t0;f tmp;ssr %s;%s;?1;%s;?1;"
+					"?t0;f tmp;ssr %s;%s;?t1;%s;?t1;"
 					"ss tmp;f-tmp;pd $r", reg, cmdvhex,
 					ref? "drr": "dr=");
 				debugstr[sizeof (debugstr) - 1] = 0;
@@ -4322,7 +4322,7 @@ dodo:
 				const char sign = (delta < 0)? '+': '-';
 				const int absdelta = R_ABS (delta);
 				snprintf (debugstr, sizeof (debugstr),
-					"diq;?0;f tmp;ssr %s;%s %d@$$%c%d;"
+					"diq;?t0;f tmp;ssr %s;%s %d@$$%c%d;"
 					"?t1;%s;"
 					"?t1;ss tmp;f-tmp;afal;pd $r",
 					reg, pxa? "pxa": pxw, size, sign, absdelta,

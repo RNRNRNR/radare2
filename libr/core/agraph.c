@@ -81,7 +81,8 @@ typedef struct ascii_edge_t {
 	RANode *from;
 	RANode *to;
 	RList *x, *y;
-	int is_reversed;
+	bool is_reversed;
+	bool is_highlight;
 } AEdge;
 
 struct layer_t {
@@ -244,7 +245,7 @@ static void update_node_dimension(const RGraph *g, int is_mini, int zoom, int ed
 	}
 }
 
-static void append_shortcut (const RAGraph *g, char *title, char *nodetitle, int left) {
+static void append_shortcut(const RAGraph *g, char *title, char *nodetitle, int left) {
 	const char *shortcut = sdb_const_get (g->db, sdb_fmt ("agraph.nodes.%s.shortcut", nodetitle), 0);
 	if (shortcut) {
 		size_t n = strlen (title);
@@ -318,7 +319,7 @@ static void mini_RANode_print(const RAGraph *g, const RANode *n, int cur, bool d
 static void tiny_RANode_print(const RAGraph *g, const RANode *n, int cur) {
 	G (n->x, n->y);
 	RCons *cons = r_cons_singleton ();
-	char *circle = cons->use_utf8 ? UTF8_CIRCLE :"()";
+	char *circle = cons->use_utf8 ? R_UTF8_CIRCLE :"()";
 	if (cur) {
 		W ("##");
 	} else {
@@ -332,8 +333,8 @@ static char *get_node_color(int color, int cur) {
                 return cur ? cons->context->pal.graph_box2 : cons->context->pal.graph_box;
         }
         return color ? (\
-                color==R_ANAL_DIFF_TYPE_MATCH ? cons->context->pal.graph_diff_match:
-                color==R_ANAL_DIFF_TYPE_UNMATCH? cons->context->pal.graph_diff_unmatch : cons->context->pal.graph_diff_new): cons->context->pal.graph_diff_unknown;
+                color == R_ANAL_DIFF_TYPE_MATCH ? cons->context->pal.graph_diff_match:
+                color == R_ANAL_DIFF_TYPE_UNMATCH? cons->context->pal.graph_diff_unmatch : cons->context->pal.graph_diff_new): cons->context->pal.graph_diff_unknown;
 }
 
 static void normal_RANode_print(const RAGraph *g, const RANode *n, int cur) {
@@ -608,6 +609,7 @@ static void view_cyclic_edge(const RGraphEdge *e, const RGraphVisitor *vis) {
 	r_list_append (g->back_edges, new_e);
 }
 
+// wtf?long_edges leaks?
 static void view_dummy(const RGraphEdge *e, const RGraphVisitor *vis) {
 	const RANode *a = get_anode (e->from);
 	const RANode *b = get_anode (e->to);
@@ -1630,7 +1632,7 @@ static void remove_dummy_nodes(const RAGraph *g) {
 }
 #endif
 
-static void set_layer_gap (RAGraph *g) {
+static void set_layer_gap(RAGraph *g) {
 	int gap = 0;
 	int i = 0, j = 0;
 	RListIter *itn;
@@ -2095,7 +2097,7 @@ static char *get_body(RCore *core, ut64 addr, int size, int opts) {
 	}
 	r_config_hold (hc, "asm.lines", "asm.bytes",
 		"asm.cmt.col", "asm.marks", "asm.offset",
-		"asm.comments", "asm.cmt.right", "asm.bb.line", NULL);
+		"asm.comments", "asm.cmt.right", "asm.lines.bb", NULL);
 	const bool o_comments = r_config_get_i (core->config, "graph.comments");
 	const bool o_cmtright = r_config_get_i (core->config, "graph.cmtright");
 	const bool o_bytes = r_config_get_i (core->config, "graph.bytes");
@@ -2117,7 +2119,7 @@ static char *get_body(RCore *core, ut64 addr, int size, int opts) {
 	const char *cmd = (opts & BODY_SUMMARY)? "pds": "pD";
 
 	// configure options
-	r_config_set_i (core->config, "asm.bb.line", false);
+	r_config_set_i (core->config, "asm.lines.bb", false);
 	r_config_set_i (core->config, "asm.lines", false);
 	r_config_set_i (core->config, "asm.cmt.col", 0);
 	r_config_set_i (core->config, "asm.marks", false);
@@ -2125,7 +2127,7 @@ static char *get_body(RCore *core, ut64 addr, int size, int opts) {
 	r_config_set_i (core->config, "asm.comments", (opts & BODY_SUMMARY) || o_comments);
 	r_config_set_i (core->config, "asm.bytes",
 		(opts & (BODY_SUMMARY | BODY_OFFSETS)) || o_bytes || o_flags_in_bytes);
-	r_config_set_i (core->config, "asm.bb.middle", false);
+	r_config_set_i (core->config, "asm.bbmiddle", false);
 	core->print->cur_enabled = false;
 
 	if (opts & BODY_OFFSETS || opts & BODY_SUMMARY || o_graph_offset) {
@@ -2317,6 +2319,20 @@ static bool isbbfew(RAnalBlock *curbb, RAnalBlock *bb) {
 	return false;
 }
 
+static void add_child(RCore *core, RAGraph *g, RANode *u, ut64 jump) {
+	if (jump == UT64_MAX) {
+		return;
+	}
+	char *title = get_title (jump);
+	RANode *v = r_agraph_get_node (g, title);
+	free (title);
+	ut64 a = r_num_get (NULL, u->title);
+	ut64 b = r_num_get (NULL, title);
+	const char *k = sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", a, b);
+	bool hl = sdb_exists (core->sdb, k);
+	r_agraph_add_edge (g, u, v, hl);
+}
+
 /* build the RGraph inside the RAGraph g, starting from the Basic Blocks */
 static int get_bbnodes(RAGraph *g, RCore *core, RAnalFunction *fcn) {
 	RAnalBlock *bb;
@@ -2391,28 +2407,14 @@ static int get_bbnodes(RAGraph *g, RCore *core, RAnalFunction *fcn) {
 
 		char *title = get_title (bb->addr);
 		RANode *u = r_agraph_get_node (g, title);
-		RANode *v;
 		free (title);
-		if (bb->jump != UT64_MAX) {
-			title = get_title (bb->jump);
-			v = r_agraph_get_node (g, title);
-			free (title);
-			r_agraph_add_edge (g, u, v);
-		}
-		if (bb->fail != UT64_MAX) {
-			title = get_title (bb->fail);
-			v = r_agraph_get_node (g, title);
-			free (title);
-			r_agraph_add_edge (g, u, v);
-		}
+		add_child (core, g, u, bb->jump);
+		add_child (core, g, u, bb->fail);
 		if (bb->switch_op) {
 			RListIter *it;
 			RAnalCaseOp *cop;
 			r_list_foreach (bb->switch_op->cases, it, cop) {
-				title = get_title (cop->addr);
-				v = r_agraph_get_node (g, title);
-				free (title);
-				r_agraph_add_edge (g, u, v);
+				add_child (core, g, u, cop->addr);
 			}
 		}
 	}
@@ -2488,7 +2490,7 @@ static bool get_cgnodes(RAGraph *g, RCore *core, RAnalFunction *fcn) {
 		node->x = 10;
 		node->y = 10;
 
-		r_agraph_add_edge (g, fcn_anode, node);
+		r_agraph_add_edge (g, fcn_anode, node, false);
 	}
 	r_list_free (refs);
 
@@ -2951,7 +2953,20 @@ static void agraph_print_edges(RAGraph *g) {
 					break;
 				}
 			}
-
+			if (!*b->title) {
+				/// XXX non-colorized edges happen because of those ghost nodes
+				// eprintf ("%s|%s%c", a->title, b->title, 10);
+			}
+			if (!R_STR_ISEMPTY (a->title) && !R_STR_ISEMPTY (b->title)) {
+				ut64 aa = r_num_get (NULL, a->title);
+				ut64 bb = r_num_get (NULL, b->title);
+				const char *k = sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", aa, bb);
+				if (sdb_exists (g->db, k)) {
+					style.ansicolor = Color_BYELLOW; // it's CYAN for graphviz
+				} else {
+					style.ansicolor = NULL;
+				}
+			}
 			switch (g->layout) {
 			case 0:
 			default:
@@ -3848,9 +3863,15 @@ R_API RANode *r_agraph_get_node(const RAGraph *g, const char *title) {
 	return node;
 }
 
-R_API void r_agraph_add_edge(const RAGraph *g, RANode *a, RANode *b) {
+R_API void r_agraph_add_edge(const RAGraph *g, RANode *a, RANode *b, bool highlight) {
 	r_return_if_fail (g && a && b);
 	r_graph_add_edge (g->graph, a->gnode, b->gnode);
+	if (highlight) {
+		ut64 aa = r_num_get (NULL, a->title);
+		ut64 bb = r_num_get (NULL, b->title);
+		const char *k = sdb_fmt ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", aa, bb);
+		sdb_set (g->db, k, "true", 0);
+	}
 	if (a->title && b->title) {
 		const char *k = sdb_fmt ("agraph.nodes.%s.neighbours", a->title);
 		sdb_array_add (g->db, k, b->title, 0);
@@ -4837,6 +4858,15 @@ R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int 
 				get_bbupdate (g, core, fcn);
 			}
 			break;
+		case '&':
+			{
+			RIOUndos *undo = r_io_sundo (core->io, core->offset);
+			r_io_sundo_redo (core->io);
+			char *c = r_str_newf ("agraph.edge.0x%"PFMT64x"_0x%"PFMT64x".highlight", undo->off, core->offset);
+			sdb_set (g->db, c, "true", 0);
+			free (c);
+			}
+			break;
 		case 'w':
 			agraph_toggle_speed (g, core);
 			break;
@@ -5016,7 +5046,7 @@ R_API RAGraph *create_agraph_from_graph(const RGraph/*<RGraphNodeInfo>*/ *graph)
 			if (!a_neighbour) {
 				goto failure;
 			}
-			r_agraph_add_edge (result_agraph, a_neighbour, a_node);
+			r_agraph_add_edge (result_agraph, a_neighbour, a_node, false);
 		}
 	}
 
